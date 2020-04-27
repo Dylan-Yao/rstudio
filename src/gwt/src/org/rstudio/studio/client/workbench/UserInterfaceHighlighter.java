@@ -30,7 +30,10 @@ import org.rstudio.core.client.dom.MutationObserver;
 import org.rstudio.core.client.events.HighlightEvent;
 import org.rstudio.core.client.events.HighlightEvent.HighlightQuery;
 import org.rstudio.studio.client.application.events.EventBus;
+import org.rstudio.studio.client.server.ServerError;
+import org.rstudio.studio.client.server.ServerRequestCallback;
 import org.rstudio.studio.client.workbench.commands.Commands;
+import org.rstudio.studio.client.workbench.views.source.model.SourceServerOperations;
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.dom.client.Document;
 import com.google.gwt.dom.client.Element;
@@ -41,6 +44,9 @@ import com.google.gwt.dom.client.Style.Visibility;
 import com.google.gwt.resources.client.ClientBundle;
 import com.google.gwt.resources.client.CssResource;
 import com.google.gwt.user.client.Command;
+import com.google.gwt.user.client.DOM;
+import com.google.gwt.user.client.Event;
+import com.google.gwt.user.client.EventListener;
 import com.google.gwt.user.client.Timer;
 import com.google.gwt.user.client.Window;
 import com.google.inject.Inject;
@@ -77,8 +83,10 @@ public class UserInterfaceHighlighter
    
    @Inject
    public UserInterfaceHighlighter(Commands commands,
-                                   EventBus events)
+                                   EventBus events,
+                                   SourceServerOperations server)
    {
+      server_ = server;
       events.addHandler(CommandEvent.TYPE, this);
       events.addHandler(HighlightEvent.TYPE, this);
       
@@ -146,7 +154,7 @@ public class UserInterfaceHighlighter
          for (int i = 0, n = highlightQueries_.size(); i < n; i++)
          {
             HighlightQuery hq = highlightQueries_.get(i);
-            addHighlightElements(hq.getQuery(), hq.getParent());
+            addHighlightElements(hq.getQuery(), hq.getParent(), hq.getCode());
          }
       }
       catch (Exception e)
@@ -159,7 +167,32 @@ public class UserInterfaceHighlighter
       }
    }
    
-   private void addHighlightElements(String query, int parent)
+   private void perform(String code)
+   {
+      server_.executeRCode(code, new ServerRequestCallback<String>(){
+         @Override
+         public void onResponseReceived(String results)
+         {
+            Debug.logToConsole("SUCCESS");
+         }
+
+         @Override
+         public void onError(ServerError error)
+         {
+            Debug.logError(error);
+         }
+      });
+   }
+
+   private native void addCallback(Element el, String code)/*-{
+      var thiz = this;
+      var callback = function() {
+         thiz.@org.rstudio.studio.client.workbench.UserInterfaceHighlighter::perform(Ljava/lang/String;)(code);
+         };
+      el.addEventListener("click", callback, true);
+   }-*/;
+
+   private void addHighlightElements(String query, int parent, String code)
    {
       NodeList<Element> els = DomUtils.querySelectorAll(Document.get().getBody(), query);
       
@@ -180,6 +213,10 @@ public class UserInterfaceHighlighter
          Element highlightEl = Document.get().createDivElement();
          highlightEl.addClassName(RES.styles().highlightEl());
          Document.get().getBody().appendChild(highlightEl);
+         if (!StringUtil.isNullOrEmpty(code))
+         {
+            addCallback(el, code);
+         }
          
          // record the pair of elements
          highlightPairs_.add(new HighlightPair(el, highlightEl));
@@ -298,6 +335,7 @@ public class UserInterfaceHighlighter
    private final List<HighlightPair> highlightPairs_;
    private final Timer repositionTimer_;
    private final MutationObserver observer_;
+   private final SourceServerOperations server_;
    
    private static final int HIGHLIGHT_ELEMENT_MAX = 10;
    private static final int REPOSITION_DELAY_MS = 0;
