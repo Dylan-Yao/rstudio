@@ -36,11 +36,13 @@ import org.rstudio.studio.client.workbench.commands.Commands;
 import org.rstudio.studio.client.workbench.views.source.model.SourceServerOperations;
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.dom.client.Document;
+import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.dom.client.Element;
 import com.google.gwt.dom.client.NodeList;
 import com.google.gwt.dom.client.Style;
 import com.google.gwt.dom.client.Style.Unit;
 import com.google.gwt.dom.client.Style.Visibility;
+import com.google.gwt.event.shared.HandlerRegistration;
 import com.google.gwt.resources.client.ClientBundle;
 import com.google.gwt.resources.client.CssResource;
 import com.google.gwt.user.client.Command;
@@ -63,8 +65,19 @@ public class UserInterfaceHighlighter
       public HighlightPair(Element monitoredElement,
                            Element highlightedElement)
       {
+         this(monitoredElement, highlightedElement, null, null);
+      }
+
+      public HighlightPair(Element monitoredElement,
+                           Element highlightedElement,
+                           String callback,
+                           UserInterfaceHighlighter highlighter)
+      {
          monitoredElement_ = monitoredElement;
          highlightedElement_ = highlightedElement;
+         highlighter_ = highlighter;
+         callback_ = callback;
+         handler_ = highlighter_ != null ? addListener() : null;
       }
 
       public Element getMonitoredElement()
@@ -76,11 +89,97 @@ public class UserInterfaceHighlighter
       {
          return highlightedElement_;
       }
+
+      public void clearHandler()
+      {
+         if (handler_ != null)
+            handler_.removeHandler();
+      }
+
+      private HandlerRegistration addListener()
+      {
+         final JavaScriptObject functor = addEventListener(callback_, monitoredElement_);
+
+         return new HandlerRegistration()
+         {
+            public void removeHandler()
+            {
+               invokeFunctor(functor);
+            }
+         };
+      }
+   
+      private native JavaScriptObject addEventListener(String code, Element el)/*-{
+         var thiz = this;
+         var callback = function() {
+            thiz.@org.rstudio.studio.client.workbench.UserInterfaceHighlighter.HighlightPair::perform()();
+            };
+         el.addEventListener("click", callback, true);
+
+         return function() {
+            el.removeEventListener("click", callback);
+         };
+      }-*/;
+
+      public void perform()
+      {
+         // This method must be called with an individual Element.
+         // Because there can be multiple pairs per highlight,
+         // we need to check if the callback has already executed before proceeding.
+         if(!highlighter_.getCallbackProcessed())
+         {
+            highlighter_.setCallbackProcessed(true);
+            highlighter_.getServer().executeRCode(callback_, new ServerRequestCallback<String>(){
       
+               @Override
+               public void onResponseReceived(String results)
+               {
+                  // Remove listener from this element and all other elements with the same query
+                  highlighter_.clearEvents();
+                  Debug.logToConsole("SUCCESS");
+               }
+      
+               @Override
+               public void onError(ServerError error)
+               {
+                  Debug.logError(error);
+               }
+            });
+         }
+      }
+
+      private static native void invokeFunctor(JavaScriptObject functor)/*-{
+         functor();
+      }-*/;
+
+      private final UserInterfaceHighlighter highlighter_;
       private final Element monitoredElement_;
       private final Element highlightedElement_;
+      private final String callback_;
+      private final HandlerRegistration handler_;
    }
    
+   public SourceServerOperations getServer()
+   {
+      return server_;
+   }
+
+   public boolean getCallbackProcessed()
+   {
+      return callbackProcessed_;
+   }
+
+   public void setCallbackProcessed(boolean value)
+   {
+      callbackProcessed_ = value;
+   }
+
+   public void clearEvents()
+   {
+      for (HighlightPair pair : highlightPairs_)
+         pair.clearHandler();
+   }
+
    @Inject
    public UserInterfaceHighlighter(Commands commands,
                                    EventBus events,
@@ -133,10 +232,10 @@ public class UserInterfaceHighlighter
    public void onHighlight(HighlightEvent event)
    {
       highlightQueries_ = event.getData();
+      callbackProcessed_ = false;
       refreshHighlighters();
       repositionTimer_.schedule(REPOSITION_DELAY_MS);
    }
-   
    
    
    // Private methods ----
@@ -167,31 +266,6 @@ public class UserInterfaceHighlighter
       }
    }
    
-   private void perform(String code)
-   {
-      server_.executeRCode(code, new ServerRequestCallback<String>(){
-         @Override
-         public void onResponseReceived(String results)
-         {
-            Debug.logToConsole("SUCCESS");
-         }
-
-         @Override
-         public void onError(ServerError error)
-         {
-            Debug.logError(error);
-         }
-      });
-   }
-
-   private native void addCallback(Element el, String code)/*-{
-      var thiz = this;
-      var callback = function() {
-         thiz.@org.rstudio.studio.client.workbench.UserInterfaceHighlighter::perform(Ljava/lang/String;)(code);
-         };
-      el.addEventListener("click", callback, true);
-   }-*/;
-
    private void addHighlightElements(String query, int parent, String code)
    {
       NodeList<Element> els = DomUtils.querySelectorAll(Document.get().getBody(), query);
@@ -208,18 +282,17 @@ public class UserInterfaceHighlighter
          Element el = els.getItem(i);
          for (int j = 0; j < parent; j++)
             el = el.getParentElement();
-         
+
          // create highlight element
          Element highlightEl = Document.get().createDivElement();
          highlightEl.addClassName(RES.styles().highlightEl());
          Document.get().getBody().appendChild(highlightEl);
-         if (!StringUtil.isNullOrEmpty(code))
-         {
-            addCallback(el, code);
-         }
-         
+
          // record the pair of elements
-         highlightPairs_.add(new HighlightPair(el, highlightEl));
+         if (StringUtil.isNullOrEmpty(code) || callbackProcessed_)
+            highlightPairs_.add(new HighlightPair(el, highlightEl));
+         else
+            highlightPairs_.add(new HighlightPair(el, highlightEl, code, this));
       }
       
       repositionTimer_.schedule(REPOSITION_DELAY_MS);
@@ -230,6 +303,7 @@ public class UserInterfaceHighlighter
    {
       for (HighlightPair pair : highlightPairs_)
          pair.getHighlightElement().removeFromParent();
+      clearEvents();
       
       repositionTimer_.cancel();
       highlightPairs_.clear();
@@ -307,8 +381,6 @@ public class UserInterfaceHighlighter
       }
    }
    
-   
-   
    // Resources ----
 
    public interface Styles extends CssResource
@@ -331,6 +403,7 @@ public class UserInterfaceHighlighter
    
    // Private members ----
    
+   private boolean callbackProcessed_;
    private JsVector<HighlightQuery> highlightQueries_;
    private final List<HighlightPair> highlightPairs_;
    private final Timer repositionTimer_;
