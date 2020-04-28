@@ -65,18 +65,20 @@ public class UserInterfaceHighlighter
       public HighlightPair(Element monitoredElement,
                            Element highlightedElement)
       {
-         this(monitoredElement, highlightedElement, null, null);
+         this(monitoredElement, highlightedElement, null, null, 0);
       }
 
       public HighlightPair(Element monitoredElement,
                            Element highlightedElement,
                            String callback,
-                           UserInterfaceHighlighter highlighter)
+                           UserInterfaceHighlighter highlighter,
+                           int index)
       {
          monitoredElement_ = monitoredElement;
          highlightedElement_ = highlightedElement;
          highlighter_ = highlighter;
          callback_ = callback;
+         index_ = index;
          handler_ = highlighter_ != null ? addListener() : null;
       }
 
@@ -112,23 +114,24 @@ public class UserInterfaceHighlighter
       private native JavaScriptObject addEventListener(String code, Element el)/*-{
          var thiz = this;
          var callback = function() {
-            thiz.@org.rstudio.studio.client.workbench.UserInterfaceHighlighter.HighlightPair::perform()();
+            thiz.@org.rstudio.studio.client.workbench.UserInterfaceHighlighter.HighlightPair::executeCallback()();
             };
          el.addEventListener("click", callback, true);
+         el.addEventListener("focus", callback, true);
 
          return function() {
             el.removeEventListener("click", callback);
+            el.removeEventListener("focus", callback);
          };
       }-*/;
 
-      public void perform()
+      public void executeCallback()
       {
-         // This method must be called with an individual Element.
-         // Because there can be multiple pairs per highlight,
-         // we need to check if the callback has already executed before proceeding.
-         if(!highlighter_.getCallbackProcessed())
+         // This method must be called by a single pair, but because there can be multiple pairs per
+         // highlight, we need to check if the callback has already executed before proceeding.
+         if(!highlighter_.getCallbackProcessed(index_))
          {
-            highlighter_.setCallbackProcessed(true);
+            highlighter_.setCallbackProcessed(index_, true);
             highlighter_.getServer().executeRCode(callback_, new ServerRequestCallback<String>(){
       
                @Override
@@ -152,6 +155,7 @@ public class UserInterfaceHighlighter
          functor();
       }-*/;
 
+      private final int index_;
       private final UserInterfaceHighlighter highlighter_;
       private final Element monitoredElement_;
       private final Element highlightedElement_;
@@ -164,14 +168,14 @@ public class UserInterfaceHighlighter
       return server_;
    }
 
-   public boolean getCallbackProcessed()
+   public boolean getCallbackProcessed(int index)
    {
-      return callbackProcessed_;
+      return queryCallbackStatuses_.get(index);
    }
 
-   public void setCallbackProcessed(boolean value)
+   public void setCallbackProcessed(int index, boolean value)
    {
-      callbackProcessed_ = value;
+      queryCallbackStatuses_.set(index, value);
    }
 
    public void clearEvents()
@@ -190,6 +194,7 @@ public class UserInterfaceHighlighter
       events.addHandler(HighlightEvent.TYPE, this);
       
       highlightQueries_ = JsVector.createVector();
+      queryCallbackStatuses_ = new ArrayList<>();
       highlightPairs_ = new ArrayList<>();
       
       // use a timer that aggressively re-positions the highlight elements.
@@ -232,7 +237,9 @@ public class UserInterfaceHighlighter
    public void onHighlight(HighlightEvent event)
    {
       highlightQueries_ = event.getData();
-      callbackProcessed_ = false;
+      queryCallbackStatuses_.clear();
+      for (int i = 0; i < highlightQueries_.size(); i++)
+         queryCallbackStatuses_.add(false);
       refreshHighlighters();
       repositionTimer_.schedule(REPOSITION_DELAY_MS);
    }
@@ -253,7 +260,10 @@ public class UserInterfaceHighlighter
          for (int i = 0, n = highlightQueries_.size(); i < n; i++)
          {
             HighlightQuery hq = highlightQueries_.get(i);
-            addHighlightElements(hq.getQuery(), hq.getParent(), hq.getCode());
+            if (queryCallbackStatuses_.get(i))
+               addHighlightElements(hq.getQuery(), hq.getParent(), new String(), 0);
+            else
+               addHighlightElements(hq.getQuery(), hq.getParent(), hq.getCallback(), i);
          }
       }
       catch (Exception e)
@@ -266,7 +276,7 @@ public class UserInterfaceHighlighter
       }
    }
    
-   private void addHighlightElements(String query, int parent, String code)
+   private void addHighlightElements(String query, int parent, String code, int index)
    {
       NodeList<Element> els = DomUtils.querySelectorAll(Document.get().getBody(), query);
       
@@ -289,10 +299,10 @@ public class UserInterfaceHighlighter
          Document.get().getBody().appendChild(highlightEl);
 
          // record the pair of elements
-         if (StringUtil.isNullOrEmpty(code) || callbackProcessed_)
+         if (StringUtil.isNullOrEmpty(code))
             highlightPairs_.add(new HighlightPair(el, highlightEl));
          else
-            highlightPairs_.add(new HighlightPair(el, highlightEl, code, this));
+            highlightPairs_.add(new HighlightPair(el, highlightEl, code, this, index));
       }
       
       repositionTimer_.schedule(REPOSITION_DELAY_MS);
@@ -403,8 +413,8 @@ public class UserInterfaceHighlighter
    
    // Private members ----
    
-   private boolean callbackProcessed_;
    private JsVector<HighlightQuery> highlightQueries_;
+   private ArrayList<Boolean> queryCallbackStatuses_;
    private final List<HighlightPair> highlightPairs_;
    private final Timer repositionTimer_;
    private final MutationObserver observer_;

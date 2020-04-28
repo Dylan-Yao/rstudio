@@ -35,12 +35,12 @@ public class HighlightEvent extends GwtEvent<HighlightEvent.Handler>
       {
       }
       
-      public static final native HighlightQuery create(String query, int parent, String code)
+      public static final native HighlightQuery create(String query, int parent, String callback)
       /*-{
          return {
             query: query || "",
             parent: parent || 0,
-            code: code || ""
+            callback: callback || ""
          }
       }-*/;
      
@@ -54,9 +54,9 @@ public class HighlightEvent extends GwtEvent<HighlightEvent.Handler>
          return this.parent || 0;
       }-*/;
 
-      public final native String getCode()
+      public final native String getCallback()
       /*-{
-         return this.code || "";
+         return this.callback || "";
       }-*/;
    }
    
