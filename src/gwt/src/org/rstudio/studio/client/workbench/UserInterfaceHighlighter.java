@@ -98,6 +98,31 @@ public class UserInterfaceHighlighter
             handler_.removeHandler();
       }
 
+      public void executeCallback()
+      {
+         // This method must be called by a single HighlightPair, but because there can be multiple
+         // pairs per query, we need to check if the callback has already executed before proceeding.
+         if(!highlighter_.getCallbackProcessed(index_))
+         {
+            highlighter_.setCallbackProcessed(index_, true);
+            highlighter_.getServer().executeRCode(callback_, new ServerRequestCallback<String>(){
+      
+               @Override
+               public void onResponseReceived(String results)
+               {
+                  // Remove listener from this element and all other elements with the same query
+                  highlighter_.clearEvents();
+               }
+      
+               @Override
+               public void onError(ServerError error)
+               {
+                  Debug.logError(error);
+               }
+            });
+         }
+      }
+
       private HandlerRegistration addListener()
       {
          final JavaScriptObject functor = addEventListener(callback_, monitoredElement_);
@@ -124,32 +149,6 @@ public class UserInterfaceHighlighter
             el.removeEventListener("focus", callback);
          };
       }-*/;
-
-      public void executeCallback()
-      {
-         // This method must be called by a single pair, but because there can be multiple pairs per
-         // highlight, we need to check if the callback has already executed before proceeding.
-         if(!highlighter_.getCallbackProcessed(index_))
-         {
-            highlighter_.setCallbackProcessed(index_, true);
-            highlighter_.getServer().executeRCode(callback_, new ServerRequestCallback<String>(){
-      
-               @Override
-               public void onResponseReceived(String results)
-               {
-                  // Remove listener from this element and all other elements with the same query
-                  highlighter_.clearEvents();
-                  Debug.logToConsole("SUCCESS");
-               }
-      
-               @Override
-               public void onError(ServerError error)
-               {
-                  Debug.logError(error);
-               }
-            });
-         }
-      }
 
       private static native void invokeFunctor(JavaScriptObject functor)/*-{
          functor();
